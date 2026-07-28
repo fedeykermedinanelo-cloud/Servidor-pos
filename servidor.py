@@ -3,15 +3,13 @@ import sqlite3
 
 app = Flask(__name__)
 
-DB_NAME = "pos_v2.db"
-
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect("pos_central.db")
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT UNIQUE,
+            codigo TEXT,
             nombre TEXT,
             categoria TEXT,
             precio REAL,
@@ -39,7 +37,7 @@ def home():
 
 @app.route("/productos", methods=["GET", "POST"])
 def manejar_productos():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect("pos_central.db")
     cursor = conn.cursor()
     if request.method == "POST":
         data = request.json
@@ -47,9 +45,6 @@ def manejar_productos():
             cursor.execute("""
                 INSERT INTO productos (codigo, nombre, categoria, precio, costo, stock)
                 VALUES (?, ?, ?, ?, ?, ?)
-                ON CONFLICT(codigo) DO UPDATE SET
-                nombre=excluded.nombre, categoria=excluded.categoria, 
-                precio=excluded.precio, costo=excluded.costo, stock=excluded.stock
             """, (data.get("codigo"), data.get("nombre"), data.get("categoria"), data.get("precio"), data.get("costo"), data.get("stock")))
             conn.commit()
             conn.close()
@@ -72,7 +67,7 @@ def manejar_productos():
 @app.route("/ventas", methods=["POST"])
 def registrar_venta():
     data = request.json
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect("pos_central.db")
     cursor = conn.cursor()
     try:
         cursor.execute("""
