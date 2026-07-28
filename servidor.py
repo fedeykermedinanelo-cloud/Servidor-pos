@@ -9,7 +9,7 @@ def init_db():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT,
+            codigo TEXT UNIQUE,
             nombre TEXT,
             categoria TEXT,
             precio REAL,
@@ -44,10 +44,19 @@ def manejar_productos():
     if request.method == "POST":
         data = request.json
         try:
-            cursor.execute("""
-                INSERT INTO productos (codigo, nombre, categoria, precio, costo, stock)
-                VALUES (?, ?, ?, ?, ?, ?)
-            """, (data.get("codigo"), data.get("nombre"), data.get("categoria"), data.get("precio"), data.get("costo"), data.get("stock")))
+            # Soporta tanto una lista de productos como un solo producto
+            items = data if isinstance(data, list) else [data]
+            for p in items:
+                cursor.execute("""
+                    INSERT INTO productos (codigo, nombre, categoria, precio, costo, stock)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(codigo) DO UPDATE SET
+                        nombre=excluded.nombre,
+                        categoria=excluded.categoria,
+                        precio=excluded.precio,
+                        costo=excluded.costo,
+                        stock=excluded.stock
+                """, (p.get("codigo"), p.get("nombre"), p.get("categoria"), p.get("precio"), p.get("costo"), p.get("stock")))
             conn.commit()
             conn.close()
             return jsonify({"status": "ok"})
@@ -85,4 +94,3 @@ def registrar_venta():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
-
