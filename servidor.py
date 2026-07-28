@@ -31,6 +31,8 @@ def init_db():
     conn.commit()
     conn.close()
 
+init_db()
+
 @app.route("/")
 def home():
     return "Servidor POS Online funcionando correctamente"
@@ -82,5 +84,5 @@ def registrar_venta():
         return jsonify({"error": str(e)}), 400
 
 if __name__ == "__main__":
-    init_db()
     app.run(host="0.0.0.0", port=10000)
+
