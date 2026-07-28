@@ -1,22 +1,31 @@
 from flask import Flask, request, jsonify
 import sqlite3
+import os
 
 app = Flask(__name__)
 
 def init_db():
     conn = sqlite3.connect("pos_central.db")
     cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS productos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT UNIQUE,
-            nombre TEXT,
-            categoria TEXT,
-            precio REAL,
-            costo REAL,
-            stock REAL
-        )
-    ''')
+    
+    # Verificamos si la tabla productos existe pero no tiene la columna UNIQUE o necesitamos actualizarla
+    try:
+        cursor.execute("SELECT codigo FROM productos LIMIT 1")
+    except sqlite3.OperationalError:
+        # Si la tabla no existe o falla, la creamos desde cero limpiamente
+        cursor.execute("DROP TABLE IF EXISTS productos")
+        cursor.execute('''
+            CREATE TABLE productos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                codigo TEXT UNIQUE,
+                nombre TEXT,
+                categoria TEXT,
+                precio REAL,
+                costo REAL,
+                stock REAL
+            )
+        ''')
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ventas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
