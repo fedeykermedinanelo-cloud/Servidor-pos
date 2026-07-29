@@ -3,9 +3,12 @@ import sqlite3
 
 app = Flask(__name__)
 
+DB_NAME = "pos_central.db"
+
 def init_db():
-    conn = sqlite3.connect("pos_central.db")
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    # Tabla de productos centralizada
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -17,6 +20,7 @@ def init_db():
             stock REAL
         )
     ''')
+    # Tabla de ventas centralizada
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ventas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,60 +41,99 @@ init_db()
 def home():
     return "Servidor POS Online funcionando correctamente"
 
+# --- ENDPOINTS PRODUCTOS ---
 @app.route("/productos", methods=["GET", "POST"])
 def manejar_productos():
-    conn = sqlite3.connect("pos_central.db")
+    conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    if request.method == "POST":
-        data = request.json
-        try:
-            # Soporta tanto una lista de productos como un solo producto
-            items = data if isinstance(data, list) else [data]
-            for p in items:
-                cursor.execute("""
-                    INSERT INTO productos (codigo, nombre, categoria, precio, costo, stock)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(codigo) DO UPDATE SET
-                        nombre=excluded.nombre,
-                        categoria=excluded.categoria,
-                        precio=excluded.precio,
-                        costo=excluded.costo,
-                        stock=excluded.stock
-                """, (p.get("codigo"), p.get("nombre"), p.get("categoria"), p.get("precio"), p.get("costo"), p.get("stock")))
-            conn.commit()
-            conn.close()
-            return jsonify({"status": "ok"})
-        except Exception as e:
-            conn.close()
-            return jsonify({"error": str(e)}), 400
-    else:
-        cursor.execute("SELECT codigo, nombre, categoria, precio, costo, stock FROM productos")
-        rows = cursor.fetchall()
-        conn.close()
-        prods = []
-        for r in rows:
-            prods.append({
-                "codigo": r[0], "nombre": r[1], "categoria": r[2], 
-                "precio": r[3], "costo": r[4], "stock": r[5]
-            })
-        return jsonify(prods)
 
-@app.route("/ventas", methods=["POST"])
-def registrar_venta():
-    data = request.json
-    conn = sqlite3.connect("pos_central.db")
-    cursor = conn.cursor()
-    try:
-        cursor.execute("""
-            INSERT INTO ventas (cajero, detalle, total_dolares, total_bolivares, tasa, fecha)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (data.get("cajero"), data.get("detalle"), data.get("total_dolares"), data.get("total_bolivares"), data.get("tasa"), data.get("fecha")))
+    if request.method == "POST":
+        data = request.get_json()
+        
+        # Permite recibir tanto un solo producto como una lista
+        if not isinstance(data, list):
+            data = [data]
+
+        for p in data:
+            cursor.execute('''
+                INSERT INTO productos (codigo, nombre, categoria, precio, costo, stock)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(codigo) DO UPDATE SET
+                    nombre=excluded.nombre,
+                    categoria=excluded.categoria,
+                    precio=excluded.precio,
+                    costo=excluded.costo,
+                    stock=excluded.stock
+            ''', (
+                p.get("codigo"),
+                p.get("nombre"),
+                p.get("categoria", "General"),
+                p.get("precio", 0.0),
+                p.get("costo", 0.0),
+                p.get("stock", 0.0)
+            ))
+        
         conn.commit()
         conn.close()
-        return jsonify({"status": "ok"})
-    except Exception as e:
+        return jsonify({"status": "ok", "mensaje": "Productos sincronizados"}), 201
+
+    else:
+        cursor.execute("SELECT codigo, nombre, categoria, precio, costo, stock FROM productos")
+        filas = cursor.fetchall()
         conn.close()
-        return jsonify({"error": str(e)}), 400
+        
+        resultado = []
+        for f in filas:
+            resultado.append({
+                "codigo": f[0],
+                "nombre": f[1],
+                "categoria": f[2],
+                "precio": f[3],
+                "costo": f[4],
+                "stock": f[5]
+            })
+        return jsonify(resultado), 200
+
+# --- ENDPOINTS VENTAS ---
+@app.route("/ventas", methods=["GET", "POST"])
+def manejar_ventas():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        data = request.get_json()
+        cursor.execute('''
+            INSERT INTO ventas (cajero, detalle, total_dolares, total_bolivares, tasa, fecha)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            data.get("cajero", "Desconocido"),
+            data.get("detalle", ""),
+            data.get("total_dolares", 0.0),
+            data.get("total_bolivares", 0.0),
+            data.get("tasa", 0.0),
+            data.get("fecha", "")
+        ))
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok", "mensaje": "Venta registrada"}), 201
+
+    else:
+        cursor.execute("SELECT id, cajero, detalle, total_dolares, total_bolivares, tasa, fecha FROM ventas")
+        filas = cursor.fetchall()
+        conn.close()
+        
+        resultado = []
+        for f in filas:
+            resultado.append({
+                "id": f[0],
+                "cajero": f[1],
+                "detalle": f[2],
+                "total_dolares": f[3],
+                "total_bolivares": f[4],
+                "tasa": f[5],
+                "fecha": f[6]
+            })
+        return jsonify(resultado), 200
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=5000)
