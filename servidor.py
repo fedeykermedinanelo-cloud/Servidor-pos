@@ -78,19 +78,20 @@ def manejar_productos():
         return jsonify({"status": "ok", "mensaje": "Productos sincronizados"}), 201
 
     else:
-        cursor.execute("SELECT codigo, nombre, categoria, precio, costo, stock FROM productos")
+        cursor.execute("SELECT id, codigo, nombre, categoria, precio, costo, stock FROM productos")
         filas = cursor.fetchall()
         conn.close()
         
         resultado = []
         for f in filas:
             resultado.append({
-                "codigo": f[0],
-                "nombre": f[1],
-                "categoria": f[2],
-                "precio": f[3],
-                "costo": f[4],
-                "stock": f[5]
+                "id": f[0],
+                "codigo": f[1],
+                "nombre": f[2],
+                "categoria": f[3],
+                "precio": f[4],
+                "costo": f[5],
+                "stock": f[6]
             })
         return jsonify(resultado), 200
 
@@ -102,6 +103,8 @@ def manejar_ventas():
 
     if request.method == "POST":
         data = request.get_json()
+        
+        # 1. Registrar la venta
         cursor.execute('''
             INSERT INTO ventas (cajero, detalle, total_dolares, total_bolivares, tasa, fecha)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -113,9 +116,22 @@ def manejar_ventas():
             data.get("tasa", 0.0),
             data.get("fecha", "")
         ))
+        
+        # 2. Descontar stock de los items vendidos (si vienen especificados en el JSON)
+        items = data.get("items", [])
+        for item in items:
+            codigo = item.get("codigo")
+            cantidad = float(item.get("cantidad", 0.0))
+            if codigo and cantidad > 0:
+                cursor.execute('''
+                    UPDATE productos 
+                    SET stock = MAX(0, stock - ?) 
+                    WHERE codigo = ?
+                ''', (cantidad, codigo))
+
         conn.commit()
         conn.close()
-        return jsonify({"status": "ok", "mensaje": "Venta registrada"}), 201
+        return jsonify({"status": "ok", "mensaje": "Venta registrada e inventario actualizado"}), 201
 
     else:
         cursor.execute("SELECT id, cajero, detalle, total_dolares, total_bolivares, tasa, fecha FROM ventas")
@@ -134,6 +150,24 @@ def manejar_ventas():
                 "fecha": f[6]
             })
         return jsonify(resultado), 200
+
+# --- ENDPOINT RESTABLECER HISTORIAL DE VENTAS (PRUEBAS) ---
+@app.route("/ventas/reset", methods=["POST", "DELETE"])
+def reset_ventas():
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        
+        # Vacia la tabla de ventas completamente
+        cursor.execute("DELETE FROM ventas")
+        # Reinicia el contador de ID autoincremental de ventas
+        cursor.execute("DELETE FROM sqlite_sequence WHERE name='ventas'")
+        
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok", "mensaje": "Historial de ventas restablecido por completo"}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "mensaje": str(e)}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
