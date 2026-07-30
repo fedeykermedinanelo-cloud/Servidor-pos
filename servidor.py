@@ -104,7 +104,6 @@ def manejar_productos():
         nuevo_prod = request.json
         codigo = str(nuevo_prod.get("codigo", "")).strip().lower()
         
-        # Buscar si ya existe por código para actualizarlo o agregarlo
         encontrado = False
         for i, p in enumerate(productos):
             if str(p.get("codigo", "")).strip().lower() == codigo:
@@ -112,7 +111,6 @@ def manejar_productos():
                 encontrado = True
                 break
         if not encontrado:
-            # Asignar ID autoincrementable si no lo tiene
             nuevo_prod["id"] = len(productos) + 1
             productos.append(nuevo_prod)
             
@@ -131,7 +129,7 @@ def manejar_ventas():
         ventas.append(nueva_venta)
         guardar_json(SALES_SERVER_FILE, ventas)
         
-        # DESCONTAR DEL STOCK AUTOMÁTICAMENTE AL VENDER
+        # Descontar stock al vender
         lista_items = nueva_venta.get("items", nueva_venta.get("productos", []))
         if lista_items:
             productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
@@ -160,41 +158,40 @@ def eliminar_venta(venta_id):
     ventas_filtradas = []
     
     for v in ventas:
-        if int(v.get("id", 0)) == venta_id or str(v.get("id")) == str(venta_id):
+        if int(v.get("id", 0)) == int(venta_id) or str(v.get("id")) == str(venta_id):
             venta_a_revertir = v
         else:
             ventas_filtradas.append(v)
             
-    if not venta_a_revertir and len(ventas) > 0:
-        ventas_filtradas = [v for v in ventas if str(v.get("id")) != str(venta_id)]
+    if not venta_a_revertir:
+        return jsonify({"error": "Venta no encontrada"}), 404
 
-    if venta_a_revertir:
-        lista_items = venta_a_revertir.get("items", [])
-        if not lista_items:
-            lista_items = venta_a_revertir.get("productos", [])
+    # Revertir stock de forma estricta y única en el servidor
+    lista_items = venta_a_revertir.get("items", [])
+    if not lista_items:
+        lista_items = venta_a_revertir.get("productos", [])
 
-        if lista_items:
-            productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
+    if lista_items:
+        productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
+        
+        for item_vendido in lista_items:
+            cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
+            id_vendido = str(item_vendido.get("id", "")).strip()
+            cant_vendida = float(item_vendido.get("cantidad", 1))
             
-            # Agrupamos por código para procesar cada producto una sola vez y evitar sumas duplicadas
-            items_procesados = {}
-            for item_vendido in lista_items:
-                cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
-                cant_vendida = float(item_vendido.get("cantidad", 1))
-                if cod_vendido:
-                    items_procesados[cod_vendido] = items_procesados.get(cod_vendido, 0.0) + cant_vendida
-
             for p in productos_server:
-                cod_prod = str(p.get("codigo", "")).strip().lower()
-                if cod_prod in items_procesados:
+                p_cod = str(p.get("codigo", "")).strip().lower()
+                p_id = str(p.get("id", "")).strip()
+                
+                # Coincidencia estricta por ID o Código
+                if (p_id and id_vendido and p_id == id_vendido) or (p_cod and cod_vendido and p_cod == cod_vendido):
                     stock_actual = float(p.get("stock", p.get("stock_disp", 0)))
-                    cant_a_devolver = items_procesados[cod_prod]
-                    
-                    p["stock"] = stock_actual + cant_a_devolver
+                    p["stock"] = stock_actual + cant_vendida
                     if "stock_disp" in p:
                         p["stock_disp"] = p["stock"]
-            
-            guardar_json(PRODUCTS_SERVER_FILE, productos_server)
+                    break
+                    
+        guardar_json(PRODUCTS_SERVER_FILE, productos_server)
 
     guardar_json(SALES_SERVER_FILE, ventas_filtradas)
     return jsonify({"status": "success", "message": f"Venta {venta_id} revertida y stock restaurado"}), 200
