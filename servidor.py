@@ -14,7 +14,6 @@ def get_db_connection():
 def init_db():
     conn = get_db_connection()
     cursor = conn.cursor()
-    # Tabla de productos centralizada
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS productos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -26,7 +25,6 @@ def init_db():
             stock REAL
         )
     ''')
-    # Tabla de ventas centralizada
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS ventas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -38,7 +36,6 @@ def init_db():
             fecha TEXT
         )
     ''')
-    # Tabla de configuración centralizada
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS configuracion (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -46,29 +43,33 @@ def init_db():
             valor TEXT
         )
     ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT UNIQUE,
+            clave TEXT,
+            rol TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
-# Inicializar base de datos al arrancar
 init_db()
 
 @app.route("/")
 def home():
     return "Servidor POS Online funcionando correctamente"
 
-# --- ENDPOINTS CONFIGURACIÓN ---
 @app.route("/configuracion", methods=["GET", "POST"])
 def manejar_configuracion():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
         if request.method == "POST":
             data = request.get_json()
             if not data:
                 conn.close()
                 return jsonify({"status": "error", "mensaje": "No se recibieron datos"}), 400
-
             for clave, valor in data.items():
                 cursor.execute('''
                     INSERT INTO configuracion (clave, valor)
@@ -76,37 +77,29 @@ def manejar_configuracion():
                     ON CONFLICT(clave) DO UPDATE SET
                         valor = excluded.valor
                 ''', (clave, str(valor)))
-
             conn.commit()
             conn.close()
             return jsonify({"status": "ok", "mensaje": "Configuración sincronizada en la nube"}), 201
-
         else:
             cursor.execute("SELECT clave, valor FROM configuracion")
             filas = cursor.fetchall()
             conn.close()
-            
             resultado = {}
             for f in filas:
                 resultado[f["clave"]] = f["valor"]
-                
             return jsonify(resultado), 200
     except Exception as e:
         return jsonify({"status": "error", "mensaje": str(e)}), 500
 
-# --- ENDPOINTS PRODUCTOS ---
 @app.route("/productos", methods=["GET", "POST"])
 def manejar_productos():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
         if request.method == "POST":
             data = request.get_json()
-            
             if not isinstance(data, list):
                 data = [data]
-
             for p in data:
                 cursor.execute('''
                     INSERT INTO productos (codigo, nombre, categoria, precio, costo, stock)
@@ -125,16 +118,13 @@ def manejar_productos():
                     p.get("costo", 0.0),
                     p.get("stock", 0.0)
                 ))
-            
             conn.commit()
             conn.close()
             return jsonify({"status": "ok", "mensaje": "Productos sincronizados"}), 201
-
         else:
             cursor.execute("SELECT id, codigo, nombre, categoria, precio, costo, stock FROM productos")
             filas = cursor.fetchall()
             conn.close()
-            
             resultado = []
             for f in filas:
                 resultado.append({
@@ -150,16 +140,53 @@ def manejar_productos():
     except Exception as e:
         return jsonify({"status": "error", "mensaje": str(e)}), 500
 
-# --- ENDPOINTS VENTAS ---
+@app.route("/usuarios", methods=["GET", "POST"])
+def manejar_usuarios():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        if request.method == "POST":
+            data = request.get_json()
+            if not isinstance(data, list):
+                data = [data]
+            for u in data:
+                cursor.execute('''
+                    INSERT INTO usuarios (usuario, clave, rol)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(usuario) DO UPDATE SET
+                        clave=excluded.clave,
+                        rol=excluded.rol
+                ''', (
+                    u.get("usuario"),
+                    u.get("clave"),
+                    u.get("rol", "Cajero")
+                ))
+            conn.commit()
+            conn.close()
+            return jsonify({"status": "ok", "mensaje": "Usuarios sincronizados"}), 201
+        else:
+            cursor.execute("SELECT id, usuario, clave, rol FROM usuarios")
+            filas = cursor.fetchall()
+            conn.close()
+            resultado = []
+            for f in filas:
+                resultado.append({
+                    "id": f["id"],
+                    "usuario": f["usuario"],
+                    "clave": f["clave"],
+                    "rol": f["rol"]
+                })
+            return jsonify(resultado), 200
+    except Exception as e:
+        return jsonify({"status": "error", "mensaje": str(e)}), 500
+
 @app.route("/ventas", methods=["GET", "POST"])
 def manejar_ventas():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-
         if request.method == "POST":
             data = request.get_json()
-            
             cursor.execute('''
                 INSERT INTO ventas (cajero, detalle, total_dolares, total_bolivares, tasa, fecha)
                 VALUES (?, ?, ?, ?, ?, ?)
@@ -171,7 +198,6 @@ def manejar_ventas():
                 data.get("tasa", 0.0),
                 data.get("fecha", "")
             ))
-            
             items = data.get("items", [])
             for item in items:
                 codigo = item.get("codigo")
@@ -182,16 +208,13 @@ def manejar_ventas():
                         SET stock = MAX(0, stock - ?) 
                         WHERE codigo = ?
                     ''', (cantidad, codigo))
-
             conn.commit()
             conn.close()
             return jsonify({"status": "ok", "mensaje": "Venta registrada e inventario actualizado"}), 201
-
         else:
             cursor.execute("SELECT id, cajero, detalle, total_dolares, total_bolivares, tasa, fecha FROM ventas")
             filas = cursor.fetchall()
             conn.close()
-            
             resultado = []
             for f in filas:
                 resultado.append({
@@ -207,7 +230,6 @@ def manejar_ventas():
     except Exception as e:
         return jsonify({"status": "error", "mensaje": str(e)}), 500
 
-# --- ENDPOINT RESTABLECER HISTORIAL DE VENTAS (PRUEBAS) ---
 @app.route("/ventas/reset", methods=["POST", "DELETE"])
 def reset_ventas():
     try:
