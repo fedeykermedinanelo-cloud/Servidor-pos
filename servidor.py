@@ -137,14 +137,36 @@ def manejar_ventas():
 @app.route('/ventas/<int:venta_id>', methods=['DELETE'])
 def eliminar_venta(venta_id):
     ventas = leer_json(SALES_SERVER_FILE, [])
-    ventas_filtradas = [v for v in ventas if int(v.get("id", 0)) != venta_id]
     
-    if len(ventas_filtradas) == len(ventas):
-        # Intentar buscar por coincidencia si el ID difiere
+    # Buscar la venta antes de borrarla para saber qué productos devolver al stock
+    venta_a_revertir = None
+    ventas_filtradas = []
+    
+    for v in ventas:
+        if int(v.get("id", 0)) == venta_id or str(v.get("id")) == str(venta_id):
+            venta_a_revertir = v
+        else:
+            ventas_filtradas.append(v)
+            
+    if not venta_a_revertir and len(ventas) > 0:
         ventas_filtradas = [v for v in ventas if str(v.get("id")) != str(venta_id)]
 
+    # Si encontramos la venta y tiene productos asociados, devolvemos el stock al inventario
+    if venta_a_revertir and "productos" in venta_a_revertir:
+        productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
+        for item_vendido in venta_a_revertir["productos"]:
+            cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
+            cant_vendida = int(item_vendido.get("cantidad", 1))
+            
+            for p in productos_server:
+                if str(p.get("codigo", "")).strip().lower() == cod_vendido:
+                    stock_actual = int(p.get("stock", p.get("stock_disp", 0)))
+                    p["stock"] = stock_actual + cant_vendida
+                    break
+        guardar_json(PRODUCTS_SERVER_FILE, productos_server)
+
     guardar_json(SALES_SERVER_FILE, ventas_filtradas)
-    return jsonify({"status": "success", "message": f"Venta {venta_id} revertida/eliminada"}), 200
+    return jsonify({"status": "success", "message": f"Venta {venta_id} revertida y stock restaurado"}), 200
 
 @app.route('/ventas/reset', methods=['DELETE'])
 def reset_ventas():
