@@ -130,6 +130,25 @@ def manejar_ventas():
         nueva_venta["id"] = len(ventas) + 1
         ventas.append(nueva_venta)
         guardar_json(SALES_SERVER_FILE, ventas)
+        
+        # DESCONTAR DEL STOCK AUTOMÁTICAMENTE AL VENDER
+        lista_items = nueva_venta.get("items", nueva_venta.get("productos", []))
+        if lista_items:
+            productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
+            for item_vendido in lista_items:
+                cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
+                cant_vendida = float(item_vendido.get("cantidad", 1))
+                
+                for p in productos_server:
+                    if str(p.get("codigo", "")).strip().lower() == cod_vendido:
+                        stock_actual = float(p.get("stock", p.get("stock_disp", 0)))
+                        # Resta el stock asegurando que no baje de 0
+                        p["stock"] = max(0.0, stock_actual - cant_vendida)
+                        if "stock_disp" in p:
+                            p["stock_disp"] = p["stock"]
+                        break
+            guardar_json(PRODUCTS_SERVER_FILE, productos_server)
+
         return jsonify({"status": "success", "id": nueva_venta["id"]}), 201
     else:
         return jsonify(ventas), 200
@@ -151,17 +170,21 @@ def eliminar_venta(venta_id):
     if not venta_a_revertir and len(ventas) > 0:
         ventas_filtradas = [v for v in ventas if str(v.get("id")) != str(venta_id)]
 
-    # Si encontramos la venta y tiene productos asociados, devolvemos el stock al inventario
-    if venta_a_revertir and "productos" in venta_a_revertir:
+    # Si encontramos la venta, devolvemos el stock al inventario sumándolo correctamente
+    lista_items = venta_a_revertir.get("items", venta_a_revertir.get("productos", [])) if venta_a_revertir else []
+    if venta_a_revertir and lista_items:
         productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
-        for item_vendido in venta_a_revertir["productos"]:
+        for item_vendido in lista_items:
             cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
-            cant_vendida = int(item_vendido.get("cantidad", 1))
+            cant_vendida = float(item_vendido.get("cantidad", 1))
             
             for p in productos_server:
                 if str(p.get("codigo", "")).strip().lower() == cod_vendido:
-                    stock_actual = int(p.get("stock", p.get("stock_disp", 0)))
+                    stock_actual = float(p.get("stock", p.get("stock_disp", 0)))
+                    # Al revertir, devolvemos sumando la cantidad vendida
                     p["stock"] = stock_actual + cant_vendida
+                    if "stock_disp" in p:
+                        p["stock_disp"] = p["stock"]
                     break
         guardar_json(PRODUCTS_SERVER_FILE, productos_server)
 
