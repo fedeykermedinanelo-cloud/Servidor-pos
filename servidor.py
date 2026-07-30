@@ -129,13 +129,13 @@ def manejar_ventas():
         ventas.append(nueva_venta)
         guardar_json(SALES_SERVER_FILE, ventas)
         
-        # Descontar stock al vender
+        # Descontar stock al vender de forma segura
         lista_items = nueva_venta.get("items", nueva_venta.get("productos", []))
         if lista_items:
             productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
             for item_vendido in lista_items:
                 cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
-                cant_vendida = float(item_vendido.get("cantidad", 1))
+                cant_vendida = float(item_vendido.get("cantidad", item_vendido.get("cant", 1)))
                 
                 for p in productos_server:
                     if str(p.get("codigo", "")).strip().lower() == cod_vendido:
@@ -166,7 +166,7 @@ def eliminar_venta(venta_id):
     if not venta_a_revertir:
         return jsonify({"error": "Venta no encontrada"}), 404
 
-    # Revertir stock de forma estricta y única en el servidor
+    # Revertir stock de forma estricta y controlada
     lista_items = venta_a_revertir.get("items", [])
     if not lista_items:
         lista_items = venta_a_revertir.get("productos", [])
@@ -177,18 +177,28 @@ def eliminar_venta(venta_id):
         for item_vendido in lista_items:
             cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
             id_vendido = str(item_vendido.get("id", "")).strip()
-            cant_vendida = float(item_vendido.get("cantidad", 1))
+            cant_vendida = float(item_vendido.get("cantidad", item_vendido.get("cant", 1)))
+            
+            # Bandera para asegurar que este ítem solo se sume una vez por bucle
+            actualizado = False
             
             for p in productos_server:
+                if actualizado:
+                    break
+                    
                 p_cod = str(p.get("codigo", "")).strip().lower()
                 p_id = str(p.get("id", "")).strip()
                 
                 # Coincidencia estricta por ID o Código
-                if (p_id and id_vendido and p_id == id_vendido) or (p_cod and cod_vendido and p_cod == cod_vendido):
+                match_id = (p_id and id_vendido and p_id == id_vendido)
+                match_cod = (p_cod and cod_vendido and p_cod == cod_vendido)
+                
+                if match_id or match_cod:
                     stock_actual = float(p.get("stock", p.get("stock_disp", 0)))
                     p["stock"] = stock_actual + cant_vendida
                     if "stock_disp" in p:
                         p["stock_disp"] = p["stock"]
+                    actualizado = True
                     break
                     
         guardar_json(PRODUCTS_SERVER_FILE, productos_server)
