@@ -1,247 +1,156 @@
 from flask import Flask, request, jsonify
-import sqlite3
+import json
 import os
 
 app = Flask(__name__)
 
-DB_NAME = "pos_central.db"
+# Archivos de persistencia en el servidor
+CONFIG_SERVER_FILE = "server_config.json"
+PRODUCTS_SERVER_FILE = "server_productos.json"
+SALES_SERVER_FILE = "server_ventas.json"
+USERS_SERVER_FILE = "server_usuarios.json"
+SESSIONS_SERVER_FILE = "server_sesiones.json"
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_NAME, timeout=10.0)
-    conn.row_factory = sqlite3.Row
-    return conn
+# --- FUNCIONES AUXILIARES DE PERSISTENCIA ---
+def leer_json(archivo, default):
+    if os.path.exists(archivo):
+        try:
+            with open(archivo, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except:
+            return default
+    return default
 
-def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS productos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            codigo TEXT UNIQUE,
-            nombre TEXT,
-            categoria TEXT,
-            precio REAL,
-            costo REAL,
-            stock REAL
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS ventas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cajero TEXT,
-            detalle TEXT,
-            total_dolares REAL,
-            total_bolivares REAL,
-            tasa REAL,
-            fecha TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS configuracion (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            clave TEXT UNIQUE,
-            valor TEXT
-        )
-    ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario TEXT UNIQUE,
-            clave TEXT,
-            rol TEXT
-        )
-    ''')
-    conn.commit()
-    conn.close()
+def guardar_json(archivo, datos):
+    try:
+        with open(archivo, "w", encoding="utf-8") as f:
+            json.dump(datos, f, ensure_ascii=False, indent=2)
+        return True
+    except Exception as e:
+        print(f"Error guardando {archivo}: {e}")
+        return False
 
-init_db()
-
-@app.route("/")
-def home():
-    return "Servidor POS Online funcionando correctamente"
-
-@app.route("/configuracion", methods=["GET", "POST"])
+# --- RUTAS DE CONFIGURACIÓN ---
+@app.route('/configuracion', methods=['GET', 'POST'])
 def manejar_configuracion():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        if request.method == "POST":
-            data = request.get_json()
-            if not data:
-                conn.close()
-                return jsonify({"status": "error", "mensaje": "No se recibieron datos"}), 400
-            for clave, valor in data.items():
-                cursor.execute('''
-                    INSERT INTO configuracion (clave, valor)
-                    VALUES (?, ?)
-                    ON CONFLICT(clave) DO UPDATE SET
-                        valor = excluded.valor
-                ''', (clave, str(valor)))
-            conn.commit()
-            conn.close()
-            return jsonify({"status": "ok", "mensaje": "Configuración sincronizada en la nube"}), 201
-        else:
-            cursor.execute("SELECT clave, valor FROM configuracion")
-            filas = cursor.fetchall()
-            conn.close()
-            resultado = {}
-            for f in filas:
-                resultado[f["clave"]] = f["valor"]
-            return jsonify(resultado), 200
-    except Exception as e:
-        return jsonify({"status": "error", "mensaje": str(e)}), 500
+    config_default = {
+        "url_servidor": "https://servidor-pos-j3tn.onrender.com",
+        "tasa_bcv": 36.50,
+        "correo_destino": "",
+        "correo_emisor": "",
+        "pass_emisor": "",
+        "actualizar_tasa_auto": "Sí"
+    }
+    if request.method == 'POST':
+        data = request.json
+        guardar_json(CONFIG_SERVER_FILE, data)
+        return jsonify({"status": "success", "message": "Configuración actualizada"}), 200
+    else:
+        config = leer_json(CONFIG_SERVER_FILE, config_default)
+        return jsonify(config), 200
 
-@app.route("/productos", methods=["GET", "POST"])
-def manejar_productos():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        if request.method == "POST":
-            data = request.get_json()
-            if not isinstance(data, list):
-                data = [data]
-            for p in data:
-                cursor.execute('''
-                    INSERT INTO productos (codigo, nombre, categoria, precio, costo, stock)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(codigo) DO UPDATE SET
-                        nombre=excluded.nombre,
-                        categoria=excluded.categoria,
-                        precio=excluded.precio,
-                        costo=excluded.costo,
-                        stock=excluded.stock
-                ''', (
-                    p.get("codigo"),
-                    p.get("nombre"),
-                    p.get("categoria", "General"),
-                    p.get("precio", 0.0),
-                    p.get("costo", 0.0),
-                    p.get("stock", 0.0)
-                ))
-            conn.commit()
-            conn.close()
-            return jsonify({"status": "ok", "mensaje": "Productos sincronizados"}), 201
-        else:
-            cursor.execute("SELECT id, codigo, nombre, categoria, precio, costo, stock FROM productos")
-            filas = cursor.fetchall()
-            conn.close()
-            resultado = []
-            for f in filas:
-                resultado.append({
-                    "id": f["id"],
-                    "codigo": f["codigo"],
-                    "nombre": f["nombre"],
-                    "categoria": f["categoria"],
-                    "precio": f["precio"],
-                    "costo": f["costo"],
-                    "stock": f["stock"]
-                })
-            return jsonify(resultado), 200
-    except Exception as e:
-        return jsonify({"status": "error", "mensaje": str(e)}), 500
-
-@app.route("/usuarios", methods=["GET", "POST"])
+# --- RUTAS DE USUARIOS ---
+@app.route('/usuarios', methods=['GET', 'POST'])
 def manejar_usuarios():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        if request.method == "POST":
-            data = request.get_json()
-            if not isinstance(data, list):
-                data = [data]
-            for u in data:
-                cursor.execute('''
-                    INSERT INTO usuarios (usuario, clave, rol)
-                    VALUES (?, ?, ?)
-                    ON CONFLICT(usuario) DO UPDATE SET
-                        clave=excluded.clave,
-                        rol=excluded.rol
-                ''', (
-                    u.get("usuario"),
-                    u.get("clave"),
-                    u.get("rol", "Cajero")
-                ))
-            conn.commit()
-            conn.close()
-            return jsonify({"status": "ok", "mensaje": "Usuarios sincronizados"}), 201
-        else:
-            cursor.execute("SELECT id, usuario, clave, rol FROM usuarios")
-            filas = cursor.fetchall()
-            conn.close()
-            resultado = []
-            for f in filas:
-                resultado.append({
-                    "id": f["id"],
-                    "usuario": f["usuario"],
-                    "clave": f["clave"],
-                    "rol": f["rol"]
-                })
-            return jsonify(resultado), 200
-    except Exception as e:
-        return jsonify({"status": "error", "mensaje": str(e)}), 500
+    usuarios_default = {
+        "Administrador": ["admin123", "Administrador"],
+        "Caja 1": ["caja123", "Cajero"],
+        "Caja 2": ["caja456", "Cajero"],
+        "Caja 3": ["caja789", "Cajero"]
+    }
+    if request.method == 'POST':
+        data = request.json
+        guardar_json(USERS_SERVER_FILE, data)
+        return jsonify({"status": "success", "message": "Usuarios sincronizados"}), 200
+    else:
+        usuarios = leer_json(USERS_SERVER_FILE, usuarios_default)
+        return jsonify(usuarios), 200
 
-@app.route("/ventas", methods=["GET", "POST"])
+# --- CONTROL DE SESIONES ACTIVAS (Una computadora por usuario) ---
+@app.route('/sesiones/verificar', methods=['GET'])
+def verificar_sesion():
+    usuario = request.args.get("usuario", "")
+    sesiones = leer_json(SESSIONS_SERVER_FILE, {})
+    activo = sesiones.get(usuario, False)
+    return jsonify({"activo": activo}), 200
+
+@app.route('/sesiones/iniciar', methods=['POST'])
+def iniciar_sesion():
+    data = request.json
+    usuario = data.get("usuario")
+    if usuario:
+        sesiones = leer_json(SESSIONS_SERVER_FILE, {})
+        sesiones[usuario] = True
+        guardar_json(SESSIONS_SERVER_FILE, sesiones)
+        return jsonify({"status": "success"}), 200
+    return jsonify({"error": "Usuario no especificado"}), 400
+
+@app.route('/sesiones/cerrar', methods=['POST'])
+def cerrar_sesion():
+    data = request.json
+    usuario = data.get("usuario")
+    if usuario:
+        sesiones = leer_json(SESSIONS_SERVER_FILE, {})
+        sesiones[usuario] = False
+        guardar_json(SESSIONS_SERVER_FILE, sesiones)
+        return jsonify({"status": "success"}), 200
+    return jsonify({"error": "Usuario no especificado"}), 400
+
+# --- RUTAS DE PRODUCTOS ---
+@app.route('/productos', methods=['GET', 'POST'])
+def manejar_productos():
+    productos = leer_json(PRODUCTS_SERVER_FILE, [])
+    if request.method == 'POST':
+        nuevo_prod = request.json
+        codigo = str(nuevo_prod.get("codigo", "")).strip().lower()
+        
+        # Buscar si ya existe por código para actualizarlo o agregarlo
+        encontrado = False
+        for i, p in enumerate(productos):
+            if str(p.get("codigo", "")).strip().lower() == codigo:
+                productos[i] = nuevo_prod
+                encontrado = True
+                break
+        if not encontrado:
+            # Asignar ID autoincrementable si no lo tiene
+            nuevo_prod["id"] = len(productos) + 1
+            productos.append(nuevo_prod)
+            
+        guardar_json(PRODUCTS_SERVER_FILE, productos)
+        return jsonify({"status": "success", "message": "Producto guardado"}), 201
+    else:
+        return jsonify(productos), 200
+
+# --- RUTAS DE VENTAS Y REVERSIÓN ---
+@app.route('/ventas', methods=['GET', 'POST'])
 def manejar_ventas():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        if request.method == "POST":
-            data = request.get_json()
-            cursor.execute('''
-                INSERT INTO ventas (cajero, detalle, total_dolares, total_bolivares, tasa, fecha)
-                VALUES (?, ?, ?, ?, ?, ?)
-            ''', (
-                data.get("cajero", "Desconocido"),
-                data.get("detalle", ""),
-                data.get("total_dolares", 0.0),
-                data.get("total_bolivares", 0.0),
-                data.get("tasa", 0.0),
-                data.get("fecha", "")
-            ))
-            items = data.get("items", [])
-            for item in items:
-                codigo = item.get("codigo")
-                cantidad = float(item.get("cantidad", 0.0))
-                if codigo and cantidad > 0:
-                    cursor.execute('''
-                        UPDATE productos 
-                        SET stock = MAX(0, stock - ?) 
-                        WHERE codigo = ?
-                    ''', (cantidad, codigo))
-            conn.commit()
-            conn.close()
-            return jsonify({"status": "ok", "mensaje": "Venta registrada e inventario actualizado"}), 201
-        else:
-            cursor.execute("SELECT id, cajero, detalle, total_dolares, total_bolivares, tasa, fecha FROM ventas")
-            filas = cursor.fetchall()
-            conn.close()
-            resultado = []
-            for f in filas:
-                resultado.append({
-                    "id": f["id"],
-                    "cajero": f["cajero"],
-                    "detalle": f["detalle"],
-                    "total_dolares": f["total_dolares"],
-                    "total_bolivares": f["total_bolivares"],
-                    "tasa": f["tasa"],
-                    "fecha": f["fecha"]
-                })
-            return jsonify(resultado), 200
-    except Exception as e:
-        return jsonify({"status": "error", "mensaje": str(e)}), 500
+    ventas = leer_json(SALES_SERVER_FILE, [])
+    if request.method == 'POST':
+        nueva_venta = request.json
+        nueva_venta["id"] = len(ventas) + 1
+        ventas.append(nueva_venta)
+        guardar_json(SALES_SERVER_FILE, ventas)
+        return jsonify({"status": "success", "id": nueva_venta["id"]}), 201
+    else:
+        return jsonify(ventas), 200
 
-@app.route("/ventas/reset", methods=["POST", "DELETE"])
+@app.route('/ventas/<int:venta_id>', methods=['DELETE'])
+def eliminar_venta(venta_id):
+    ventas = leer_json(SALES_SERVER_FILE, [])
+    ventas_filtradas = [v for v in ventas if int(v.get("id", 0)) != venta_id]
+    
+    if len(ventas_filtradas) == len(ventas):
+        # Intentar buscar por coincidencia si el ID difiere
+        ventas_filtradas = [v for v in ventas if str(v.get("id")) != str(venta_id)]
+
+    guardar_json(SALES_SERVER_FILE, ventas_filtradas)
+    return jsonify({"status": "success", "message": f"Venta {venta_id} revertida/eliminada"}), 200
+
+@app.route('/ventas/reset', methods=['DELETE'])
 def reset_ventas():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM ventas")
-        cursor.execute("DELETE FROM sqlite_sequence WHERE name='ventas'")
-        conn.commit()
-        conn.close()
-        return jsonify({"status": "ok", "mensaje": "Historial de ventas restablecido por completo"}), 200
-    except Exception as e:
-        return jsonify({"status": "error", "mensaje": str(e)}), 500
+    guardar_json(SALES_SERVER_FILE, [])
+    return jsonify({"status": "success", "message": "Historial de ventas reiniciado"}), 200
 
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+if __name__ == '__main__':
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host='0.0.0.0', port=port)
