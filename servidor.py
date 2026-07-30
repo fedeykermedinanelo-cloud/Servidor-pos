@@ -164,9 +164,9 @@ def eliminar_venta(venta_id):
             ventas_filtradas.append(v)
             
     if not venta_a_revertir:
-        return jsonify({"error": "Venta no encontrada"}), 404
+        return jsonify({"error": "Venta ya revertida o no encontrada"}), 404
 
-    # Revertir stock de forma estricta y controlada
+    # Revertir stock de forma estricta y controlada una sola vez
     lista_items = venta_a_revertir.get("items", [])
     if not lista_items:
         lista_items = venta_a_revertir.get("productos", [])
@@ -179,9 +179,7 @@ def eliminar_venta(venta_id):
             id_vendido = str(item_vendido.get("id", "")).strip()
             cant_vendida = float(item_vendido.get("cantidad", item_vendido.get("cant", 1)))
             
-            # Bandera para asegurar que este ítem solo se sume una vez por bucle
             actualizado = False
-            
             for p in productos_server:
                 if actualizado:
                     break
@@ -189,7 +187,6 @@ def eliminar_venta(venta_id):
                 p_cod = str(p.get("codigo", "")).strip().lower()
                 p_id = str(p.get("id", "")).strip()
                 
-                # Coincidencia estricta por ID o Código
                 match_id = (p_id and id_vendido and p_id == id_vendido)
                 match_cod = (p_cod and cod_vendido and p_cod == cod_vendido)
                 
