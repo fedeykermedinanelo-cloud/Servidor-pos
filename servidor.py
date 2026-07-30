@@ -32,6 +32,14 @@ def init_db():
             fecha TEXT
         )
     ''')
+    # NUEVA: Tabla de configuración centralizada
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS configuracion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clave TEXT UNIQUE,
+            valor TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -40,6 +48,42 @@ init_db()
 @app.route("/")
 def home():
     return "Servidor POS Online funcionando correctamente"
+
+# --- ENDPOINTS CONFIGURACIÓN ---
+@app.route("/configuracion", methods=["GET", "POST"])
+def manejar_configuracion():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        data = request.get_json()
+        if not data:
+            conn.close()
+            return jsonify({"status": "error", "mensaje": "No se recibieron datos"}), 400
+
+        # Guardar cada clave/valor de la configuración en la base de datos
+        for clave, valor in data.items():
+            cursor.execute('''
+                INSERT INTO configuracion (clave, valor)
+                VALUES (?, ?)
+                ON CONFLICT(clave) DO UPDATE SET
+                    valor = excluded.valor
+            ''', (clave, str(valor)))
+
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok", "mensaje": "Configuración sincronizada en la nube"}), 201
+
+    else:
+        cursor.execute("SELECT clave, valor FROM configuracion")
+        filas = cursor.fetchall()
+        conn.close()
+        
+        resultado = {}
+        for f in filas:
+            resultado[f[0]] = f[1]
+            
+        return jsonify(resultado), 200
 
 # --- ENDPOINTS PRODUCTOS ---
 @app.route("/productos", methods=["GET", "POST"])
@@ -50,7 +94,6 @@ def manejar_productos():
     if request.method == "POST":
         data = request.get_json()
         
-        # Permite recibir tanto un solo producto como una lista
         if not isinstance(data, list):
             data = [data]
 
@@ -104,7 +147,6 @@ def manejar_ventas():
     if request.method == "POST":
         data = request.get_json()
         
-        # 1. Registrar la venta
         cursor.execute('''
             INSERT INTO ventas (cajero, detalle, total_dolares, total_bolivares, tasa, fecha)
             VALUES (?, ?, ?, ?, ?, ?)
@@ -117,7 +159,6 @@ def manejar_ventas():
             data.get("fecha", "")
         ))
         
-        # 2. Descontar stock de los items vendidos (si vienen especificados en el JSON)
         items = data.get("items", [])
         for item in items:
             codigo = item.get("codigo")
@@ -157,12 +198,8 @@ def reset_ventas():
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
-        
-        # Vacia la tabla de ventas completamente
         cursor.execute("DELETE FROM ventas")
-        # Reinicia el contador de ID autoincremental de ventas
         cursor.execute("DELETE FROM sqlite_sequence WHERE name='ventas'")
-        
         conn.commit()
         conn.close()
         return jsonify({"status": "ok", "mensaje": "Historial de ventas restablecido por completo"}), 200
@@ -171,3 +208,107 @@ def reset_ventas():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
+￼Enterlask import Flask, request, jsonify
+import sqlite3
+
+app = Flask(__name__)
+
+DB_NAME = "pos_central.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    # Tabla de productos centralizada
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS productos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo TEXT UNIQUE,
+            nombre TEXT,
+            categoria TEXT,
+            precio REAL,
+            costo REAL,
+            stock REAL
+        )
+    ''')
+    # Tabla de ventas centralizada
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ventas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cajero TEXT,
+            detalle TEXT,
+            total_dolares REAL,
+            total_bolivares REAL,
+            tasa REAL,
+            fecha TEXT
+        )
+    ''')
+    # NUEVA: Tabla de configuración centralizada
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS configuracion (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            clave TEXT UNIQUE,
+            valor TEXT
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+@app.route("/")
+def home():
+    return "Servidor POS Online funcionando correctamente"
+
+# --- ENDPOINTS CONFIGURACIÓN ---
+@app.route("/configuracion", methods=["GET", "POST"])
+def manejar_configuracion():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        data = request.get_json()
+        if not data:
+            conn.close()
+            return jsonify({"status": "error", "mensaje": "No se recibieron datos"}), 400
+
+        # Guardar cada clave/valor de la configuración en la base de datos
+        for clave, valor in data.items():
+            cursor.execute('''
+                INSERT INTO configuracion (clave, valor)
+                VALUES (?, ?)
+                ON CONFLICT(clave) DO UPDATE SET
+                    valor = excluded.valor
+            ''', (clave, str(valor)))
+
+        conn.commit()
+        conn.close()
+        return jsonify({"status": "ok", "mensaje": "Configuración sincronizada en la nube"}), 201
+
+    else:
+        cursor.execute("SELECT clave, valor FROM configuracion")
+        filas = cursor.fetchall()
+        conn.close()
+        
+        resultado = {}
+        for f in filas:
+            resultado[f[0]] = f[1]
+            
+        return jsonify(resultado), 200
+
+# --- ENDPOINTS PRODUCTOS ---
+@app.route("/productos", methods=["GET", "POST"])
+def manejar_productos():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    if request.method == "POST":
+        data = request.get_json()
+        
+        if not isinstance(data, list):
+            data = [data]
+
+        for p in data:
+            cursor.execute('''
+                INSERT INTO productos (codigo, nombre, categoria, precio, costo, stock)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(codigo) DO UPDATE SET
