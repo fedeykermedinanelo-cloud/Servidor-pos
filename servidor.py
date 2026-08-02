@@ -1,23 +1,31 @@
 from flask import Flask, request, jsonify
 import os
-from supabase import create_client, Client
+from supabase import create_client
 
 app = Flask(__name__)
 
 # --- CONFIGURACIÓN DE SUPABASE ---
-SUPABASE_URL = os.environ.get("SUPABASE_URL")
-SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
 
-supabase: Client = None
+# Limpiar posibles comillas o espacios extras en las variables de entorno
+if SUPABASE_URL.startswith('"') and SUPABASE_URL.endswith('"'):
+    SUPABASE_URL = SUPABASE_URL[1:-1]
+if SUPABASE_KEY.startswith('"') and SUPABASE_KEY.endswith('"'):
+    SUPABASE_KEY = SUPABASE_KEY[1:-1]
+
+supabase = None
 if SUPABASE_URL and SUPABASE_KEY:
     try:
         supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+        print("Conexión con Supabase inicializada correctamente.")
     except Exception as e:
-        print(f"Error conectando a Supabase: {e}")
+        print(f"Error crítico al crear el cliente de Supabase: {e}")
 
 # --- FUNCIONES AUXILIARES DE PERSISTENCIA EN SUPABASE ---
 def leer_json(key_name, default):
     if not supabase:
+        print(f"Advertencia: Supabase no está conectado. Usando default para {key_name}")
         return default
     try:
         response = supabase.table("app_storage").select("data").eq("key", key_name).execute()
@@ -29,10 +37,9 @@ def leer_json(key_name, default):
 
 def guardar_json(key_name, datos):
     if not supabase:
-        print("Supabase no está configurado.")
+        print(f"Advertencia: Supabase no está conectado. No se pudo guardar {key_name}")
         return False
     try:
-        # Usamos upsert para insertar o actualizar el registro basado en la 'key'
         supabase.table("app_storage").upsert({"key": key_name, "data": datos}).execute()
         return True
     except Exception as e:
