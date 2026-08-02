@@ -1,33 +1,42 @@
 from flask import Flask, request, jsonify
-import json
 import os
+from supabase import create_client, Client
 
 app = Flask(__name__)
 
-# Archivos de persistencia en el servidor
-CONFIG_SERVER_FILE = "server_config.json"
-PRODUCTS_SERVER_FILE = "server_productos.json"
-SALES_SERVER_FILE = "server_ventas.json"
-USERS_SERVER_FILE = "server_usuarios.json"
-SESSIONS_SERVER_FILE = "server_sesiones.json"
+# --- CONFIGURACIÓN DE SUPABASE ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-# --- FUNCIONES AUXILIARES DE PERSISTENCIA ---
-def leer_json(archivo, default):
-    if os.path.exists(archivo):
-        try:
-            with open(archivo, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except:
-            return default
+supabase: Client = None
+if SUPABASE_URL and SUPABASE_KEY:
+    try:
+        supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+    except Exception as e:
+        print(f"Error conectando a Supabase: {e}")
+
+# --- FUNCIONES AUXILIARES DE PERSISTENCIA EN SUPABASE ---
+def leer_json(key_name, default):
+    if not supabase:
+        return default
+    try:
+        response = supabase.table("app_storage").select("data").eq("key", key_name).execute()
+        if response.data and len(response.data) > 0:
+            return response.data[0]["data"]
+    except Exception as e:
+        print(f"Error leyendo {key_name} de Supabase: {e}")
     return default
 
-def guardar_json(archivo, datos):
+def guardar_json(key_name, datos):
+    if not supabase:
+        print("Supabase no está configurado.")
+        return False
     try:
-        with open(archivo, "w", encoding="utf-8") as f:
-            json.dump(datos, f, ensure_ascii=False, indent=2)
+        # Usamos upsert para insertar o actualizar el registro basado en la 'key'
+        supabase.table("app_storage").upsert({"key": key_name, "data": datos}).execute()
         return True
     except Exception as e:
-        print(f"Error guardando {archivo}: {e}")
+        print(f"Error guardando {key_name} en Supabase: {e}")
         return False
 
 # --- RUTAS DE CONFIGURACIÓN ---
@@ -43,10 +52,10 @@ def manejar_configuracion():
     }
     if request.method == 'POST':
         data = request.json
-        guardar_json(CONFIG_SERVER_FILE, data)
+        guardar_json("server_config", data)
         return jsonify({"status": "success", "message": "Configuración actualizada"}), 200
     else:
-        config = leer_json(CONFIG_SERVER_FILE, config_default)
+        config = leer_json("server_config", config_default)
         return jsonify(config), 200
 
 # --- RUTAS DE USUARIOS ---
@@ -60,17 +69,17 @@ def manejar_usuarios():
     }
     if request.method == 'POST':
         data = request.json
-        guardar_json(USERS_SERVER_FILE, data)
+        guardar_json("server_usuarios", data)
         return jsonify({"status": "success", "message": "Usuarios sincronizados"}), 200
     else:
-        usuarios = leer_json(USERS_SERVER_FILE, usuarios_default)
+        usuarios = leer_json("server_usuarios", usuarios_default)
         return jsonify(usuarios), 200
 
 # --- CONTROL DE SESIONES ACTIVAS (Una computadora por usuario) ---
 @app.route('/sesiones/verificar', methods=['GET'])
 def verificar_sesion():
     usuario = request.args.get("usuario", "")
-    sesiones = leer_json(SESSIONS_SERVER_FILE, {})
+    sesiones = leer_json("server_sesiones", {})
     activo = sesiones.get(usuario, False)
     return jsonify({"activo": activo}), 200
 
@@ -79,9 +88,9 @@ def iniciar_sesion():
     data = request.json
     usuario = data.get("usuario")
     if usuario:
-        sesiones = leer_json(SESSIONS_SERVER_FILE, {})
+        sesiones = leer_json("server_sesiones", {})
         sesiones[usuario] = True
-        guardar_json(SESSIONS_SERVER_FILE, sesiones)
+        guardar_json("server_sesiones", sesiones)
         return jsonify({"status": "success"}), 200
     return jsonify({"error": "Usuario no especificado"}), 400
 
@@ -90,16 +99,16 @@ def cerrar_sesion():
     data = request.json
     usuario = data.get("usuario")
     if usuario:
-        sesiones = leer_json(SESSIONS_SERVER_FILE, {})
+        sesiones = leer_json("server_sesiones", {})
         sesiones[usuario] = False
-        guardar_json(SESSIONS_SERVER_FILE, sesiones)
+        guardar_json("server_sesiones", sesiones)
         return jsonify({"status": "success"}), 200
     return jsonify({"error": "Usuario no especificado"}), 400
 
 # --- RUTAS DE PRODUCTOS ---
 @app.route('/productos', methods=['GET', 'POST'])
 def manejar_productos():
-    productos = leer_json(PRODUCTS_SERVER_FILE, [])
+    productos = leer_json("server_productos", [])
     if request.method == 'POST':
         nuevo_prod = request.json
         codigo = str(nuevo_prod.get("codigo", "")).strip().lower()
@@ -114,7 +123,7 @@ def manejar_productos():
             nuevo_prod["id"] = len(productos) + 1
             productos.append(nuevo_prod)
             
-        guardar_json(PRODUCTS_SERVER_FILE, productos)
+        guardar_json("server_productos", productos)
         return jsonify({"status": "success", "message": "Producto guardado"}), 201
     else:
         return jsonify(productos), 200
@@ -122,17 +131,17 @@ def manejar_productos():
 # --- RUTAS DE VENTAS Y REVERSIÓN ---
 @app.route('/ventas', methods=['GET', 'POST'])
 def manejar_ventas():
-    ventas = leer_json(SALES_SERVER_FILE, [])
+    ventas = leer_json("server_ventas", [])
     if request.method == 'POST':
         nueva_venta = request.json
         nueva_venta["id"] = len(ventas) + 1
         ventas.append(nueva_venta)
-        guardar_json(SALES_SERVER_FILE, ventas)
+        guardar_json("server_ventas", ventas)
         
         # Descontar stock al vender de forma segura
         lista_items = nueva_venta.get("items", nueva_venta.get("productos", []))
         if lista_items:
-            productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
+            productos_server = leer_json("server_productos", [])
             for item_vendido in lista_items:
                 cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
                 cant_vendida = float(item_vendido.get("cantidad", item_vendido.get("cant", 1)))
@@ -144,7 +153,7 @@ def manejar_ventas():
                         if "stock_disp" in p:
                             p["stock_disp"] = p["stock"]
                         break
-            guardar_json(PRODUCTS_SERVER_FILE, productos_server)
+            guardar_json("server_productos", productos_server)
 
         return jsonify({"status": "success", "id": nueva_venta["id"]}), 201
     else:
@@ -152,7 +161,7 @@ def manejar_ventas():
 
 @app.route('/ventas/<int:venta_id>', methods=['DELETE'])
 def eliminar_venta(venta_id):
-    ventas = leer_json(SALES_SERVER_FILE, [])
+    ventas = leer_json("server_ventas", [])
     
     venta_a_revertir = None
     ventas_filtradas = []
@@ -172,7 +181,7 @@ def eliminar_venta(venta_id):
         lista_items = venta_a_revertir.get("productos", [])
 
     if lista_items:
-        productos_server = leer_json(PRODUCTS_SERVER_FILE, [])
+        productos_server = leer_json("server_productos", [])
         
         for item_vendido in lista_items:
             cod_vendido = str(item_vendido.get("codigo", "")).strip().lower()
@@ -198,14 +207,14 @@ def eliminar_venta(venta_id):
                     actualizado = True
                     break
                     
-        guardar_json(PRODUCTS_SERVER_FILE, productos_server)
+        guardar_json("server_productos", productos_server)
 
-    guardar_json(SALES_SERVER_FILE, ventas_filtradas)
+    guardar_json("server_ventas", ventas_filtradas)
     return jsonify({"status": "success", "message": f"Venta {venta_id} revertida y stock restaurado"}), 200
 
 @app.route('/ventas/reset', methods=['DELETE'])
 def reset_ventas():
-    guardar_json(SALES_SERVER_FILE, [])
+    guardar_json("server_ventas", [])
     return jsonify({"status": "success", "message": "Historial de ventas reiniciado"}), 200
 
 if __name__ == '__main__':
