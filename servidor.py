@@ -22,13 +22,16 @@ if SUPABASE_URL and SUPABASE_KEY:
     except Exception as e:
         print(f"Error crítico al crear el cliente de Supabase: {e}")
 
+# --- MEMORIA LOCAL PARA SESIONES ACTIVAS ---
+# Esto evita guardarlo en Supabase y mantiene el bloqueo por usuario en vivo en Render
+sesiones_activas = {}
+
 # --- FUNCIONES AUXILIARES DE PERSISTENCIA EN SUPABASE ---
 def leer_json(key_name, default):
     if not supabase:
         print(f"Advertencia: Supabase no está conectado. Usando default para {key_name}")
         return default
     try:
-        # Ajustado a "Key" en mayúscula para coincidir con la columna de Supabase
         response = supabase.table("app_storage").select("data").eq("Key", key_name).execute()
         if response.data and len(response.data) > 0:
             return response.data[0]["data"]
@@ -41,7 +44,6 @@ def guardar_json(key_name, datos):
         print(f"Advertencia: Supabase no está conectado. No se pudo guardar {key_name}")
         return False
     try:
-        # Ajustado a "Key" en mayúscula para coincidir con la columna de Supabase
         supabase.table("app_storage").upsert({"Key": key_name, "data": datos}).execute()
         return True
     except Exception as e:
@@ -84,12 +86,11 @@ def manejar_usuarios():
         usuarios = leer_json("server_usuarios", usuarios_default)
         return jsonify(usuarios), 200
 
-# --- CONTROL DE SESIONES ACTIVAS (Una computadora por usuario) ---
+# --- CONTROL DE SESIONES ACTIVAS (En memoria local del servidor) ---
 @app.route('/sesiones/verificar', methods=['GET'])
 def verificar_sesion():
     usuario = request.args.get("usuario", "")
-    sesiones = leer_json("server_sesiones", {})
-    activo = sesiones.get(usuario, False)
+    activo = sesiones_activas.get(usuario, False)
     return jsonify({"activo": activo}), 200
 
 @app.route('/sesiones/iniciar', methods=['POST'])
@@ -97,9 +98,7 @@ def iniciar_sesion():
     data = request.json
     usuario = data.get("usuario")
     if usuario:
-        sesiones = leer_json("server_sesiones", {})
-        sesiones[usuario] = True
-        guardar_json("server_sesiones", sesiones)
+        sesiones_activas[usuario] = True
         return jsonify({"status": "success"}), 200
     return jsonify({"error": "Usuario no especificado"}), 400
 
@@ -108,9 +107,7 @@ def cerrar_sesion():
     data = request.json
     usuario = data.get("usuario")
     if usuario:
-        sesiones = leer_json("server_sesiones", {})
-        sesiones[usuario] = False
-        guardar_json("server_sesiones", sesiones)
+        sesiones_activas[usuario] = False
         return jsonify({"status": "success"}), 200
     return jsonify({"error": "Usuario no especificado"}), 400
 
