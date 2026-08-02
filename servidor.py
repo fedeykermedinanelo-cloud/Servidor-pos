@@ -28,7 +28,8 @@ def leer_json(key_name, default):
         print(f"Advertencia: Supabase no está conectado. Usando default para {key_name}")
         return default
     try:
-        response = supabase.table("app_storage").select("data").eq("key", key_name).execute()
+        # Ajustado a "Key" en mayúscula para coincidir con la columna de Supabase
+        response = supabase.table("app_storage").select("data").eq("Key", key_name).execute()
         if response.data and len(response.data) > 0:
             return response.data[0]["data"]
     except Exception as e:
@@ -40,7 +41,8 @@ def guardar_json(key_name, datos):
         print(f"Advertencia: Supabase no está conectado. No se pudo guardar {key_name}")
         return False
     try:
-        supabase.table("app_storage").upsert({"key": key_name, "data": datos}).execute()
+        # Ajustado a "Key" en mayúscula para coincidir con la columna de Supabase
+        supabase.table("app_storage").upsert({"Key": key_name, "data": datos}).execute()
         return True
     except Exception as e:
         print(f"Error guardando {key_name} en Supabase: {e}")
