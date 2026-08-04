@@ -201,7 +201,7 @@ def cerrar_sesion():
                 cuerpo_individual += f"- Biopago: {monto_biopago}\n"
                 cuerpo_individual += f"- Efectivo: {monto_efectivo}\n"
                 cuerpo_individual += f"- Divisas: {monto_divisas}\n"
-                cuerpo_total = f"TOTAL CAJA: {monto_total}\n"
+                cuerpo_individual += f"TOTAL CAJA: {monto_total}\n"
 
                 enviar_correo_smtp(correo_dest, correo_emisor, pass_emisor, f"Cierre de Turno - {caja_nombre}", cuerpo_individual)
 
@@ -296,7 +296,7 @@ def eliminar_venta(venta_id):
             ventas_filtradas.append(v)
             
     if not venta_a_revertir:
-        return jsonify({"error": "Venta ya revertida o no encontrada"}}, 404
+        return jsonify({"error": "Venta ya revertida o no encontrada"}), 404
 
     lista_items = venta_a_revertir.get("items", [])
     if not lista_items:
