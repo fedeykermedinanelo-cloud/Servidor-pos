@@ -1,5 +1,8 @@
 from flask import Flask, request, jsonify
 import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 from supabase import create_client
 
 app = Flask(__name__)
@@ -48,6 +51,25 @@ def guardar_json(key_name, datos):
         return True
     except Exception as e:
         print(f"Error guardando {key_name} en Supabase: {e}")
+        return False
+
+# --- FUNCIÓN AUXILIAR PARA ENVIAR CORREOS SMTP ---
+def enviar_correo_smtp(destinatario, emisor, password, asunto, cuerpo):
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = emisor
+        msg['To'] = destinatario
+        msg['Subject'] = asunto
+        msg.attach(MIMEText(cuerpo, 'plain'))
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(emisor, password)
+        server.sendmail(emisor, destinatario, msg.as_string())
+        server.quit()
+        return True
+    except Exception as e:
+        print(f"Error enviando correo: {e}")
         return False
 
 # --- RUTAS DE CONFIGURACIÓN ---
@@ -104,12 +126,113 @@ def iniciar_sesion():
 
 @app.route('/sesiones/cerrar', methods=['POST'])
 def cerrar_sesion():
-    data = request.json
+    data = request.json or {}
     usuario = data.get("usuario")
-    if usuario:
-        sesiones_activas[usuario] = False
-        return jsonify({"status": "success"}), 200
-    return jsonify({"error": "Usuario no especificado"}), 400
+    datos_cierre = data.get("datos_cierre", {}) # Totales enviados desde la caja al cerrar
+    
+    if not usuario:
+        return jsonify({"error": "Usuario no especificado"}), 400
+
+    # 1. Marcar como inactivo en memoria (mantiene tu bloqueo en vivo exacto)
+    sesiones_activas[usuario] = False
+
+    # Si es Administrador, cerramos de inmediato sin procesar cola de cajas
+    if "admin" in usuario.lower() or usuario.lower() == "administrador":
+        return jsonify({"status": "success", "message": "Sesión de administrador cerrada"}), 200
+
+    # 2. Guardar o actualizar el cierre parcial de esta caja en Supabase (REPOSO)
+    cierres_actuales = leer_json("server_cierres_turno", [])
+    cierres_actuales = [c for c in cierres_actuales if c.get("usuario") != usuario]
+    datos_cierre["usuario"] = usuario
+    cierres_actuales.append(datos_cierre)
+    guardar_json("server_cierres_turno", cierres_actuales)
+
+    # 3. Contar cuántas cajas (excluyendo al administrador) siguen activas
+    cajas_activas_restantes = 0
+    for usr, activo in sesiones_activas.items():
+        if activo and not ("admin" in usr.lower() or usr.lower() == "administrador"):
+            cajas_activas_restantes += 1
+
+    # 4. Validar si aún faltan cajas por cerrar
+    if cajas_activas_restantes > 0:
+        return jsonify({
+            "status": "success", 
+            "message": f"Cierre de {usuario} en reposo en la nube. Faltan {cajas_activas_restantes} caja(s) por cerrar."
+        }), 200
+    else:
+        # ¡TODAS LAS CAJAS HAN CERRADO! Es momento de procesar los correos en reposo y el consolidado.
+        config = leer_json("server_config", {})
+        correo_dest = config.get("correo_destino", "")
+        correo_emisor = config.get("correo_emisor", "")
+        pass_emisor = config.get("pass_emisor", "")
+
+        if correo_dest and correo_emisor and pass_emisor:
+            # Variables acumuladoras para el consolidado global
+            total_general_pto = 0
+            total_general_pago_movil = 0
+            total_general_biopago = 0
+            total_general_efectivo = 0
+            total_general_divisas = 0
+            total_general_general = 0
+            
+            cuerpo_total_consolidado = "--- RESUMEN CONSOLIDADO GENERAL DE CIERRE DE TODAS LAS CAJAS ---\n\n"
+
+            # A. Enviar el correo individual de cada caja que estaba en reposo
+            for cierre in cierres_actuales:
+                caja_nombre = cierre.get("usuario", "Caja")
+                
+                # Extracción flexible de los métodos de pago enviados por el cliente
+                monto_pto = float(cierre.get("total_punto", cierre.get("punto_venta", 0)))
+                monto_pago_movil = float(cierre.get("total_pago_movil", cierre.get("pago_movil", 0)))
+                monto_biopago = float(cierre.get("total_biopago", cierre.get("biopago", 0)))
+                monto_efectivo = float(cierre.get("total_efectivo", cierre.get("efectivo", 0)))
+                monto_divisas = float(cierre.get("total_divisas", cierre.get("divisas", 0)))
+                monto_total = float(cierre.get("total_venta", cierre.get("total_general", 0)))
+                
+                # Acumular para el total general
+                total_general_pto += monto_pto
+                total_general_pago_movil += monto_pago_movil
+                total_general_biopago += monto_biopago
+                total_general_efectivo += monto_efectivo
+                total_general_divisas += monto_divisas
+                total_general_general += monto_total
+
+                # Armar cuerpo del correo individual
+                cuerpo_individual = f"Reporte de Cierre de Caja\n"
+                cuerpo_individual += f"Cajero / Caja: {caja_nombre}\n"
+                cuerpo_individual += f"- Punto de Venta: {monto_pto}\n"
+                cuerpo_individual += f"- Pago Móvil: {monto_pago_movil}\n"
+                cuerpo_individual += f"- Biopago: {monto_biopago}\n"
+                cuerpo_individual += f"- Efectivo: {monto_efectivo}\n"
+                cuerpo_individual += f"- Divisas: {monto_divisas}\n"
+                cuerpo_individual += f"TOTAL CAJA: {monto_total}\n"
+
+                # Enviar correo individual de la caja correspondiente
+                enviar_correo_smtp(correo_dest, correo_emisor, pass_emisor, f"Cierre de Turno - {caja_nombre}", cuerpo_individual)
+
+                # Agregar línea al resumen consolidado
+                cuerpo_total_consolidado += f"• {caja_nombre} -> Punto: {monto_pto} | Pago Móvil: {monto_pago_movil} | Biopago: {monto_biopago} | Total: {monto_total}\n"
+
+            # B. Agregar la sumatoria total general al correo consolidado
+            cuerpo_total_consolidado += f"\n----------------------------------------\n"
+            cuerpo_total_consolidado += f"GRAN TOTAL PUNTO DE VENTA: {total_general_pto}\n"
+            cuerpo_total_consolidado += f"GRAN TOTAL PAGO MÓVIL: {total_general_pago_movil}\n"
+            cuerpo_total_consolidado += f"GRAN TOTAL BIOPAGO: {total_general_biopago}\n"
+            cuerpo_total_consolidado += f"GRAN TOTAL EFECTIVO: {total_general_efectivo}\n"
+            cuerpo_total_consolidado += f"GRAN TOTAL DIVISAS: {total_general_divisas}\n"
+            cuerpo_total_consolidado += f"----------------------------------------\n"
+            cuerpo_total_consolidado += f"GRAN TOTAL GENERAL DE LA JORNADA: {total_general_general}\n"
+
+            # C. Enviar el correo electrónico consolidado final
+            enviar_correo_smtp(correo_dest, correo_emisor, pass_emisor, "Consolidado Total de Cierres de Caja", cuerpo_total_consolidado)
+
+        # 5. Limpiar los cierres temporales en la nube para dejarlos listos para el próximo turno
+        guardar_json("server_cierres_turno", [])
+
+        return jsonify({
+            "status": "success", 
+            "message": "Todas las cajas cerradas. Correos individuales en reposo y consolidado total enviados con éxito."
+        }), 200
 
 # --- RUTAS DE PRODUCTOS ---
 @app.route('/productos', methods=['GET', 'POST'])
