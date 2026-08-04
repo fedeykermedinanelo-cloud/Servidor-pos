@@ -25,10 +25,6 @@ if SUPABASE_URL and SUPABASE_KEY:
     except Exception as e:
         print(f"Error crítico al crear el cliente de Supabase: {e}")
 
-# --- MEMORIA LOCAL PARA SESIONES ACTIVAS ---
-# Esto evita guardarlo en Supabase y mantiene el bloqueo por usuario en vivo en Render
-sesiones_activas = {}
-
 # --- FUNCIONES AUXILIARES DE PERSISTENCIA EN SUPABASE ---
 def leer_json(key_name, default):
     if not supabase:
@@ -108,10 +104,11 @@ def manejar_usuarios():
         usuarios = leer_json("server_usuarios", usuarios_default)
         return jsonify(usuarios), 200
 
-# --- CONTROL DE SESIONES ACTIVAS (En memoria local del servidor) ---
+# --- CONTROL DE SESIONES ACTIVAS (Sincronizado en Supabase) ---
 @app.route('/sesiones/verificar', methods=['GET'])
 def verificar_sesion():
     usuario = request.args.get("usuario", "")
+    sesiones_activas = leer_json("server_sesiones", {})
     activo = sesiones_activas.get(usuario, False)
     return jsonify({"activo": activo}), 200
 
@@ -120,7 +117,9 @@ def iniciar_sesion():
     data = request.json
     usuario = data.get("usuario")
     if usuario:
+        sesiones_activas = leer_json("server_sesiones", {})
         sesiones_activas[usuario] = True
+        guardar_json("server_sesiones", sesiones_activas)
         return jsonify({"status": "success"}), 200
     return jsonify({"error": "Usuario no especificado"}), 400
 
@@ -133,10 +132,12 @@ def cerrar_sesion():
     if not usuario:
         return jsonify({"error": "Usuario no especificado"}), 400
 
-    # 1. Marcar como inactivo en memoria (mantiene tu bloqueo en vivo exacto)
+    # 1. Marcar como inactivo en Supabase
+    sesiones_activas = leer_json("server_sesiones", {})
     sesiones_activas[usuario] = False
+    guardar_json("server_sesiones", sesiones_activas)
 
-    # Si es Administrador, cerramos de inmediato sin procesar cola de cajas
+    # Si es Administrador, cerramos de inmediato sin procesar cola de cajas de cobro
     if "admin" in usuario.lower() or usuario.lower() == "administrador":
         return jsonify({"status": "success", "message": "Sesión de administrador cerrada"}), 200
 
@@ -147,10 +148,11 @@ def cerrar_sesion():
     cierres_actuales.append(datos_cierre)
     guardar_json("server_cierres_turno", cierres_actuales)
 
-    # 3. Contar cuántas cajas (excluyendo al administrador) siguen activas
+    # 3. Contar cuántas cajas (excluyendo al administrador) siguen activas en Supabase
     cajas_activas_restantes = 0
     for usr, activo in sesiones_activas.items():
-        if activo and not ("admin" in usr.lower() or usr.lower() == "administrador"):
+        is_usr_admin = "admin" in usr.lower() or usr.lower() == "administrador"
+        if activo and not is_usr_admin:
             cajas_activas_restantes += 1
 
     # 4. Validar si aún faltan cajas por cerrar
@@ -160,14 +162,13 @@ def cerrar_sesion():
             "message": f"Cierre de {usuario} en reposo en la nube. Faltan {cajas_activas_restantes} caja(s) por cerrar."
         }), 200
     else:
-        # ¡TODAS LAS CAJAS HAN CERRADO! Es momento de procesar los correos en reposo y el consolidado.
+        # ¡TODAS LAS CAJAS HAN CERRADO! Procesar correos individuales y consolidado.
         config = leer_json("server_config", {})
         correo_dest = config.get("correo_destino", "")
         correo_emisor = config.get("correo_emisor", "")
         pass_emisor = config.get("pass_emisor", "")
 
         if correo_dest and correo_emisor and pass_emisor:
-            # Variables acumuladoras para el consolidado global
             total_general_pto = 0
             total_general_pago_movil = 0
             total_general_biopago = 0
@@ -177,19 +178,17 @@ def cerrar_sesion():
             
             cuerpo_total_consolidado = "--- RESUMEN CONSOLIDADO GENERAL DE CIERRE DE TODAS LAS CAJAS ---\n\n"
 
-            # A. Enviar el correo individual de cada caja que estaba en reposo
+            # A. Enviar el correo individual de cada caja en reposo
             for cierre in cierres_actuales:
                 caja_nombre = cierre.get("usuario", "Caja")
                 
-                # Extracción flexible de los métodos de pago enviados por el cliente
                 monto_pto = float(cierre.get("total_punto", cierre.get("punto_venta", 0)))
                 monto_pago_movil = float(cierre.get("total_pago_movil", cierre.get("pago_movil", 0)))
                 monto_biopago = float(cierre.get("total_biopago", cierre.get("biopago", 0)))
                 monto_efectivo = float(cierre.get("total_efectivo", cierre.get("efectivo", 0)))
                 monto_divisas = float(cierre.get("total_divisas", cierre.get("divisas", 0)))
-                monto_total = float(cierre.get("total_venta", cierre.get("total_general", 0)))
+                monto_total = float(cierre.get("total_venta", cierre.get("total_general", cierre.get("total_dolares", 0))))
                 
-                # Acumular para el total general
                 total_general_pto += monto_pto
                 total_general_pago_movil += monto_pago_movil
                 total_general_biopago += monto_biopago
@@ -197,7 +196,6 @@ def cerrar_sesion():
                 total_general_divisas += monto_divisas
                 total_general_general += monto_total
 
-                # Armar cuerpo del correo individual
                 cuerpo_individual = f"Reporte de Cierre de Caja\n"
                 cuerpo_individual += f"Cajero / Caja: {caja_nombre}\n"
                 cuerpo_individual += f"- Punto de Venta: {monto_pto}\n"
@@ -207,13 +205,11 @@ def cerrar_sesion():
                 cuerpo_individual += f"- Divisas: {monto_divisas}\n"
                 cuerpo_individual += f"TOTAL CAJA: {monto_total}\n"
 
-                # Enviar correo individual de la caja correspondiente
                 enviar_correo_smtp(correo_dest, correo_emisor, pass_emisor, f"Cierre de Turno - {caja_nombre}", cuerpo_individual)
 
-                # Agregar línea al resumen consolidado
                 cuerpo_total_consolidado += f"• {caja_nombre} -> Punto: {monto_pto} | Pago Móvil: {monto_pago_movil} | Biopago: {monto_biopago} | Total: {monto_total}\n"
 
-            # B. Agregar la sumatoria total general al correo consolidado
+            # B. Agregar sumatoria total general al consolidado
             cuerpo_total_consolidado += f"\n----------------------------------------\n"
             cuerpo_total_consolidado += f"GRAN TOTAL PUNTO DE VENTA: {total_general_pto}\n"
             cuerpo_total_consolidado += f"GRAN TOTAL PAGO MÓVIL: {total_general_pago_movil}\n"
@@ -223,11 +219,12 @@ def cerrar_sesion():
             cuerpo_total_consolidado += f"----------------------------------------\n"
             cuerpo_total_consolidado += f"GRAN TOTAL GENERAL DE LA JORNADA: {total_general_general}\n"
 
-            # C. Enviar el correo electrónico consolidado final
+            # C. Enviar correo consolidado final
             enviar_correo_smtp(correo_dest, correo_emisor, pass_emisor, "Consolidado Total de Cierres de Caja", cuerpo_total_consolidado)
 
-        # 5. Limpiar los cierres temporales en la nube para dejarlos listos para el próximo turno
+        # 5. Limpiar los cierres temporales y las sesiones en Supabase
         guardar_json("server_cierres_turno", [])
+        guardar_json("server_sesiones", {})
 
         return jsonify({
             "status": "success", 
@@ -267,7 +264,6 @@ def manejar_ventas():
         ventas.append(nueva_venta)
         guardar_json("server_ventas", ventas)
         
-        # Descontar stock al vender de forma segura
         lista_items = nueva_venta.get("items", nueva_venta.get("productos", []))
         if lista_items:
             productos_server = leer_json("server_productos", [])
@@ -304,7 +300,6 @@ def eliminar_venta(venta_id):
     if not venta_a_revertir:
         return jsonify({"error": "Venta ya revertida o no encontrada"}), 404
 
-    # Revertir stock de forma estricta y controlada una sola vez
     lista_items = venta_a_revertir.get("items", [])
     if not lista_items:
         lista_items = venta_a_revertir.get("productos", [])
