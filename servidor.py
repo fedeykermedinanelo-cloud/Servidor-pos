@@ -25,6 +25,9 @@ if SUPABASE_URL and SUPABASE_KEY:
     except Exception as e:
         print(f"Error crítico al crear el cliente de Supabase: {e}")
 
+# --- MEMORIA LOCAL EXCLUSIVA PARA SESIONES ACTIVAS ---
+sesiones_activas = {}
+
 # --- FUNCIONES AUXILIARES DE PERSISTENCIA EN SUPABASE ---
 def leer_json(key_name, default):
     if not supabase:
@@ -104,11 +107,10 @@ def manejar_usuarios():
         usuarios = leer_json("server_usuarios", usuarios_default)
         return jsonify(usuarios), 200
 
-# --- CONTROL DE SESIONES ACTIVAS (Sincronizado en Supabase) ---
+# --- CONTROL DE SESIONES ACTIVAS (En memoria local de Render) ---
 @app.route('/sesiones/verificar', methods=['GET'])
 def verificar_sesion():
     usuario = request.args.get("usuario", "")
-    sesiones_activas = leer_json("server_sesiones", {})
     activo = sesiones_activas.get(usuario, False)
     return jsonify({"activo": activo}), 200
 
@@ -117,9 +119,7 @@ def iniciar_sesion():
     data = request.json
     usuario = data.get("usuario")
     if usuario:
-        sesiones_activas = leer_json("server_sesiones", {})
         sesiones_activas[usuario] = True
-        guardar_json("server_sesiones", sesiones_activas)
         return jsonify({"status": "success"}), 200
     return jsonify({"error": "Usuario no especificado"}), 400
 
@@ -132,10 +132,8 @@ def cerrar_sesion():
     if not usuario:
         return jsonify({"error": "Usuario no especificado"}), 400
 
-    # 1. Marcar como inactivo en Supabase
-    sesiones_activas = leer_json("server_sesiones", {})
+    # 1. Marcar siempre como inactivo en memoria local
     sesiones_activas[usuario] = False
-    guardar_json("server_sesiones", sesiones_activas)
 
     # Si es Administrador, cerramos de inmediato sin procesar cola de cajas de cobro
     if "admin" in usuario.lower() or usuario.lower() == "administrador":
@@ -148,7 +146,7 @@ def cerrar_sesion():
     cierres_actuales.append(datos_cierre)
     guardar_json("server_cierres_turno", cierres_actuales)
 
-    # 3. Contar cuántas cajas (excluyendo al administrador) siguen activas en Supabase
+    # 3. Contar cuántas cajas (excluyendo al administrador) siguen activas en memoria
     cajas_activas_restantes = 0
     for usr, activo in sesiones_activas.items():
         is_usr_admin = "admin" in usr.lower() or usr.lower() == "administrador"
@@ -203,7 +201,7 @@ def cerrar_sesion():
                 cuerpo_individual += f"- Biopago: {monto_biopago}\n"
                 cuerpo_individual += f"- Efectivo: {monto_efectivo}\n"
                 cuerpo_individual += f"- Divisas: {monto_divisas}\n"
-                cuerpo_individual += f"TOTAL CAJA: {monto_total}\n"
+                cuerpo_total = f"TOTAL CAJA: {monto_total}\n"
 
                 enviar_correo_smtp(correo_dest, correo_emisor, pass_emisor, f"Cierre de Turno - {caja_nombre}", cuerpo_individual)
 
@@ -222,9 +220,9 @@ def cerrar_sesion():
             # C. Enviar correo consolidado final
             enviar_correo_smtp(correo_dest, correo_emisor, pass_emisor, "Consolidado Total de Cierres de Caja", cuerpo_total_consolidado)
 
-        # 5. Limpiar los cierres temporales y las sesiones en Supabase
+        # 5. Limpiar los cierres temporales en la nube y vaciar sesiones locales
         guardar_json("server_cierres_turno", [])
-        guardar_json("server_sesiones", {})
+        sesiones_activas.clear()
 
         return jsonify({
             "status": "success", 
@@ -298,7 +296,7 @@ def eliminar_venta(venta_id):
             ventas_filtradas.append(v)
             
     if not venta_a_revertir:
-        return jsonify({"error": "Venta ya revertida o no encontrada"}), 404
+        return jsonify({"error": "Venta ya revertida o no encontrada"}}, 404
 
     lista_items = venta_a_revertir.get("items", [])
     if not lista_items:
