@@ -86,11 +86,11 @@ def enviar_correo_smtp(destinatario, emisor, password, asunto, cuerpo):
 @app.route('/configuracion', methods=['GET', 'POST'])
 def manejar_configuracion():
     config_default = {
-        "url_servidor": "https://sistema-pos-20cm.onrender.com",
+        "url_servidor": "",
         "tasa_bcv": 36.50,
-        "correo_destino": "expendiodemedicinas.lc@gmail.com",
-        "correo_emisor": "reportesdeventas29@gmail.com",
-        "pass_emisor": "tlibjzjfwpoddkxg",
+        "correo_destino": "",
+        "correo_emisor": "",
+        "pass_emisor": "",
         "actualizar_tasa_auto": "Sí"
     }
     if request.method == 'POST':
