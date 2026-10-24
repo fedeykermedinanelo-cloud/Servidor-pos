@@ -1,4 +1,4 @@
-rom flask import Flask, request, jsonify
+from flask import Flask, request, jsonify
 import os
 import smtplib
 import threading
@@ -86,11 +86,11 @@ def enviar_correo_smtp(destinatario, emisor, password, asunto, cuerpo):
 @app.route('/configuracion', methods=['GET', 'POST'])
 def manejar_configuracion():
     config_default = {
-        "url_servidor": "",
+        "url_servidor": "https://servidor-pos-j3tn.onrender.com",
         "tasa_bcv": 36.50,
         "correo_destino": "",
-        "correo_emisor": "",
-        "pass_emisor": "",
+        "correo_emisor": "reportesdeventas29@gmail.com",
+        "pass_emisor": "tlibjzjfwpoddkxg",
         "actualizar_tasa_auto": "Sí"
     }
     if request.method == 'POST':
